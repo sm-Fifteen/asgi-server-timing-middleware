@@ -27,11 +27,14 @@ class ServerTimingMiddleware:
 			and qualified function names can be obtained with
 			`my_function.__qualname__` for both functions and coroutines.
 
+		max_profiler_mem (int): Memory threshold (in bytes) at which yappi's
+			profiler memory gets cleared.
+
 	.. _Server-Timing sepcification:
 		https://w3c.github.io/server-timing/#the-server-timing-header-field
 	"""
 
-	def __init__(self, app, calls_to_track: Dict[str, str]):
+	def __init__(self, app, calls_to_track: Dict[str, str], max_profiler_mem: int = 50_000_000):
 		for metric_name in calls_to_track.keys():
 			# https://httpwg.org/specs/rfc7230.html#rule.token.separators
 			# USASCII (7 bits), only visible characters (no non-printables or space), no double-quote or delimiter
@@ -41,11 +44,11 @@ class ServerTimingMiddleware:
 
 		self.app = app
 		self.calls_to_track = calls_to_track
+		self.max_profiler_mem = max_profiler_mem
 
 		yappi.set_tag_callback(_get_context_tag)
 		yappi.set_clock_type("wall")
 
-		# TODO: Schedule some kind of periodic profiler cleanup with clear_stats()
 		yappi.start()
 
 	async def __call__(self, scope, receive, send):
@@ -71,7 +74,10 @@ class ServerTimingMiddleware:
 
 				if server_timing:
 					# FIXME: Doesn't check if a server-timing header is already set
-					response['headers'].append(["server-timing", b','.join(server_timing)])
+					response['headers'].append([b'server-timing', b','.join(server_timing)])
+
+				if yappi.get_mem_usage() >= self.max_profiler_mem:
+					yappi.clear_stats()
 
 			return send(response)
 
