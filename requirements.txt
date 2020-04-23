@@ -1,1 +1,1 @@
-yappi
+yappi>=1.2.4 #func_matches support
