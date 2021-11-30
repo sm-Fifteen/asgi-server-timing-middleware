@@ -2,9 +2,9 @@
 """
 
 # standard library
-from inspect import isfunction
 from contextvars import ContextVar
 from re import search, Pattern, compile
+from inspect import isfunction, ismethod
 from typing import Any, Callable, Dict, Iterable, List
 
 # yappi
@@ -48,6 +48,7 @@ class ServerTimingMiddleware:
 		"""
 		return (
 			isfunction(function)
+			or ismethod(function)
 			or type(function).__name__ == 'cython_function_or_method'
 		)
 
@@ -121,7 +122,7 @@ class ServerTimingMiddleware:
 			non_functions: List = [
 				profiled
 				for profiled in profiled_functions
-				if self.is_function(profiled)
+				if not self.is_function(profiled)
 			]
 
 			if len(non_functions) == 1:
@@ -131,7 +132,7 @@ class ServerTimingMiddleware:
 				)
 			elif non_functions:
 				raise TypeError(
-					f'The targeted functions {non_functions}'
+					f'The targets {non_functions}'
 					f' for key "{metric_name}" are not functions'
 				)
 
