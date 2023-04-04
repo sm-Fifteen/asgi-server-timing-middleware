@@ -133,13 +133,12 @@ class ServerTimingMetric(_ServerTimingMetricName):
             )
 
     def to_optional_value_dict(self) -> Dict:
-        # TODO: maybe just use a dictionary comprehension?
-        d = {}
-        if self.duration:
-            d['dur'] = self.duration
-        if self.description:
-            d['desc'] = self.description
-        return d
+        value = {}
+        if self.duration is not None:
+            value['dur'] = self.duration
+        if self.description is not None:
+            value['desc'] = self.description
+        return value
 
     def to_header_string(self) -> str:
         """
@@ -150,9 +149,9 @@ class ServerTimingMetric(_ServerTimingMetricName):
             A formatted header string.
         """
         metric: str = self.name
-        if self.duration:
+        if self.duration is not None:
             metric = f'{metric};dur={self.duration:.3f}'
-        if self.description:
+        if self.description is not None:
             metric = f'{metric};desc="{self.description}"'
         return metric
 
@@ -357,7 +356,7 @@ class ServerTimingMiddleware:
             if response['type'] == 'http.response.start':
                 tracked_stats: Dict[_ServerTimingMetricName, yappi.YFuncStats] = {
                     key: yappi.get_func_stats(
-                        filter=dict(tag=ctx_tag),
+                        filter={'tag': ctx_tag},
                         filter_callback=lambda stat: yappi.func_matches(stat, callables)
                     )
                     for key, callables in self.calls_to_track.items()
