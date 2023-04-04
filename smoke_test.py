@@ -1,12 +1,18 @@
-import fastapi
-import pydantic
-from fastapi import FastAPI
+"""
+"""
+
+# standard library
 from asyncio import sleep as async_sleep
 from time import perf_counter_ns
 
+# API
+import fastapi
+import pydantic
+
+# asgi-server-timing
 from asgi_server_timing import ServerTimingMiddleware, ServerTimingMetric
 
-fastapi_app: FastAPI = fastapi.FastAPI()
+fastapi_app: fastapi.FastAPI = fastapi.FastAPI()
 
 
 @fastapi_app.get("/")

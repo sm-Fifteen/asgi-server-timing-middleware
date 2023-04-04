@@ -1,13 +1,18 @@
 """
+asgi_server_timing.middleware
+
+An ASGI middleware that wraps the excellent yappi profiler to let you measure the execution time of any function or
+coroutine in the context of an HTTP request, and return it as a standard Server-Timing HTTP header.
+
+LICENSE: CC0 1.0 Universal.
 """
 
 # standard library
-from attr import define, field
+from dataclasses import dataclass
 from contextvars import ContextVar
 from collections import defaultdict
 from re import search, Pattern, compile
 from inspect import isfunction, ismethod
-from attr.validators import instance_of, optional
 from typing import (
     Any,
     Callable,
@@ -15,15 +20,14 @@ from typing import (
     Generator,
     Iterable,
     List,
+    Literal,
     Optional,
     Union,
     Tuple,
 )
 
-
 # yappi
 import yappi
-from yappi import YFuncStats
 
 # -----------------------------------------------------------------------------
 # CONSTANTS
@@ -42,12 +46,12 @@ def _get_context_tag() -> int:
 # -----------------------------------------------------------------------------
 # CLASSES
 # -----------------------------------------------------------------------------
-@define(slots=True, frozen=True, auto_attribs=True)
-class ServerTimingMetricName:
+@dataclass(slots=True, frozen=True)
+class _ServerTimingMetricName:
     """
     https://w3c.github.io/server-timing/#the-server-timing-header-field
 
-    Args:
+    Params:
         name (str):
             A short name for the Server-Timing metric. This name must adhere to
             IETF RFC 7230.
@@ -56,19 +60,13 @@ class ServerTimingMetricName:
             A description for the Server-Timing metric. This will be returned
             as a quoted string, and therefore special characters are permitted.
     """
+    name: str
+    description: Optional[str] = None
 
-    name: str = field(
-        validator=instance_of(str)
-    )
-
-    description: Optional[str] = field(
-        default=None,
-        validator=optional(instance_of(str)),
-    )
-
-    @name.validator
-    def _validate_metric_name(self, attribute, value) -> None:
+    def __post_init__(self):
         """
+        Validates `name` and `description`.
+
         Validates whether a metric name conforms to the following requirements:
 
         - US-ASCII (7 bits)
@@ -78,32 +76,38 @@ class ServerTimingMetricName:
         For more information, please refer to IETF RFC 7230, Section 3.2.6:
         https://httpwg.org/specs/rfc7230.html#rule.token.separators
 
-        Args:
-            attribute:
-            value:
-
-        Returns:
-            None
         """
-        if not isinstance(value, str):
-            raise TypeError('Argument to parameter `name` must be a string.')
+        if (
+            self.description is not None
+            and not isinstance(self.description, str)
+        ):
+            raise TypeError(
+                'Argument to parameter `description` must be of types `str` or `None`.'
+                f' Received: {type(self.description)}.'
+            )
 
-        if not value.isascii():
-            raise AttributeError('Argument to parameter `name` must be comprised of US-ASCII characters.')
+        if not isinstance(self.name, str):
+            raise TypeError(
+                'Argument to parameter `name` must be of type `str`.'
+                f' Received: {type(self.name)}.'
+            )
 
-        if not value.isprintable():
-            raise AttributeError('Argument to parameter `name` must be printable.')
+        if not self.name.isascii():
+            raise ValueError('Argument to parameter `name` must be comprised of US-ASCII characters.')
 
-        if search(_re_pattern_invalid_characters, value):
-            raise AttributeError('Argument to parameter `name` cannot contain special characters.')
+        if not self.name.isprintable():
+            raise ValueError('Argument to parameter `name` must be printable.')
+
+        if search(_re_pattern_invalid_characters, self.name):
+            raise ValueError('Argument to parameter `name` cannot contain special characters.')
 
 
-@define(slots=True, frozen=True)
-class ServerTimingMetric(ServerTimingMetricName):
+@dataclass(slots=True, frozen=True)
+class ServerTimingMetric(_ServerTimingMetricName):
     """
     https://w3c.github.io/server-timing/#the-server-timing-header-field
 
-    Args:
+    Params:
         name (str):
             A short name for the Server-Timing metric. This name must adhere to
             IETF RFC 7230.
@@ -116,12 +120,20 @@ class ServerTimingMetric(ServerTimingMetricName):
 
     """
 
-    duration: Optional[float] = field(
-        default=None,
-        validator=optional(instance_of(float)),
-    )
+    duration: Optional[float] = None
+
+    def __post_init__(self):
+        if (
+            self.duration is not None
+            and not isinstance(self.duration, float)
+        ):
+            raise TypeError(
+                'Argument to parameter `duration` must be of types `float` or `None`.'
+                f' Received: {type(self.duration)}.'
+            )
 
     def to_optional_value_dict(self) -> Dict:
+        # TODO: maybe just use a dictionary comprehension?
         d = {}
         if self.duration:
             d['dur'] = self.duration
@@ -135,7 +147,7 @@ class ServerTimingMetric(ServerTimingMetricName):
         `<name>;dur=<duration>;desc=<description>`
 
         Returns:
-            A string;
+            A formatted header string.
         """
         metric: str = self.name
         if self.duration:
@@ -181,14 +193,14 @@ class ServerTimingHeaderField(defaultdict):
 
 
 def server_timing_metrics_to_dict(header_field: str) -> ServerTimingHeaderField:
-    d = ServerTimingHeaderField()
+    server_timing_header_field = ServerTimingHeaderField()
     for metric in header_field.split(','):
         parameters = metric.split(';')
         name = parameters[0]
         for parameter in parameters[1:]:
             key, value = parameter.split('=')
-            d[name][key] = value
-    return d
+            server_timing_header_field[name][key] = value
+    return server_timing_header_field
 
 
 # -----------------------------------------------------------------------------
@@ -207,10 +219,14 @@ class ServerTimingMiddleware:
     @staticmethod
     def is_function(function: Any) -> bool:
         """
+        Determine if a value is a function, method, or cython_function_or_method.
+
         Args:
-            function:
+            function: Any value.
 
         Returns:
+            True if the argument to the function parameter is one of
+                {function, method, cython_function_or_method}. False otherwise.
         """
         return (
             isfunction(function)
@@ -223,7 +239,7 @@ class ServerTimingMiddleware:
         app,
         calls_to_track: Dict[ServerTimingMetric, Iterable[Callable]],
         max_profiler_mem: int = 50_000_000,
-        overwrite_behavior: Optional[str] = None,
+        overwrite_behavior: Optional[Literal['replace', 'retain']] = None,
     ):
         """
         Args:
@@ -239,7 +255,7 @@ class ServerTimingMiddleware:
                 Memory threshold (in bytes) at which yappi's profiler memory
                 gets cleared.
 
-            overwrite_behavior (Optional[str]):
+            overwrite_behavior (Optional[Literal['replace', 'retain']]):
                 "replace" or "retain". Defaults to None.
 
                 Section 3, "The Server-Timing Header Field", of the W3C
@@ -310,7 +326,6 @@ class ServerTimingMiddleware:
                         'Argument to parameter "overwrite_behavior" must be one'
                         ' of "replace", "retain", or {None, False, "", etc.}'
                     )
-
         self.overwrite_behavior: Optional[str] = overwrite_behavior
 
         yappi.set_tag_callback(_get_context_tag)
@@ -322,17 +337,25 @@ class ServerTimingMiddleware:
         _yappi_ctx_tag.set(ctx_tag)
 
         def wrapped_send(response: Dict[str, Union[str, int, List[Tuple[bytes, bytes]]]]):
-            # response={
-            #     'type': 'http.response.start',
-            #     'status': 200,
-            #     'headers': [
-            #         (b'content-length', b'9'),
-            #         (b'content-type', b'application/json')
-            #     ]
-            # } is of type <class 'dict'>, not Starlette Response
+            """
+            Args:
+                response (dict):
+                    A dictionary representing a Starlette Response.
+                    Note that this is not a Starlette Response type.
+
+            Example:
+                response = {
+                    'type': 'http.response.start',
+                    'status': 200,
+                    'headers': [
+                        (b'content-length', b'9'),
+                        (b'content-type', b'application/json')
+                    ]
+                } is of type <class 'dict'>, not Starlette Response
+            """
 
             if response['type'] == 'http.response.start':
-                tracked_stats: Dict[ServerTimingMetricName, YFuncStats] = {
+                tracked_stats: Dict[_ServerTimingMetricName, yappi.YFuncStats] = {
                     key: yappi.get_func_stats(
                         filter=dict(tag=ctx_tag),
                         filter_callback=lambda stat: yappi.func_matches(stat, callables)
@@ -375,14 +398,7 @@ class ServerTimingMiddleware:
                             performance.to_header_string()
                             for performance in performances
                         ).encode('ascii')
-                        response['headers'].append([b'server-timing', server_timing])
-
-                    # if self.overwrite_behavior:
-                    #     response['headers'].append([b'server-timing', server_timing])
-                    # else:
-                    #     for i, header in enumerate(response['headers']):
-                    #         if header[0] == b'server-timing':
-                    #             response['headers'][i][1] += (b',' + server_timing)
+                        response['headers'].append((b'server-timing', server_timing))
 
                 if yappi.get_mem_usage() >= self.max_profiler_mem:
                     yappi.clear_stats()
