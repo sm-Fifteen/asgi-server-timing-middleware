@@ -1,1 +1,1 @@
-from .middleware import ServerTimingMiddleware
+from .middleware import ServerTimingMiddleware, ServerTimingMetric

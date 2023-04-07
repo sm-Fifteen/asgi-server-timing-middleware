@@ -33,6 +33,14 @@ setup(
 	author_email='sm-fifteen@ihateemails.invalid',
 	license='CC0 1.0 Universal',
 	install_requires=['yappi>=1.2.4'],
+	extras_require={
+		'dev': [
+			'fastapi',
+			'pydantic',
+			'httpx',
+			'pytest',
+		]
+	},
 	packages=['asgi_server_timing'],
 	python_requires='>=3.7, <4',
 	data_files=[

@@ -1,12 +1,19 @@
-import fastapi
-import pydantic
-from fastapi import FastAPI
+"""
+"""
+
+# standard library
 from asyncio import sleep as async_sleep
 from time import perf_counter_ns
 
-from asgi_server_timing import ServerTimingMiddleware
+# API
+import fastapi
+import pydantic
 
-fastapi_app = fastapi.FastAPI()
+# asgi-server-timing
+from asgi_server_timing import ServerTimingMiddleware, ServerTimingMetric
+
+fastapi_app: fastapi.FastAPI = fastapi.FastAPI()
+
 
 @fastapi_app.get("/")
 async def context_id_endpoint():
@@ -18,17 +25,18 @@ async def context_id_endpoint():
 
 
 track = {
-	"1deps": (fastapi.routing.solve_dependencies,),
-	"2main": (fastapi.routing.run_endpoint_function,),
-	"3valid": (pydantic.fields.ModelField.validate,),
-	"4encode": (fastapi.encoders.jsonable_encoder,),
-	"5render": (
+	ServerTimingMetric("1deps", "One"): (fastapi.routing.solve_dependencies,),
+	ServerTimingMetric("2main", "Two"): (fastapi.routing.run_endpoint_function,),
+	ServerTimingMetric("3valid", "Three"): (pydantic.fields.ModelField.validate,),
+	ServerTimingMetric("4encode", "Four"): (fastapi.encoders.jsonable_encoder,),
+	ServerTimingMetric("5render", "Five"): (
 		fastapi.responses.JSONResponse.render,
 		fastapi.responses.ORJSONResponse.render,
 	),
+	# ServerTimingMetric("6profile", "Middleware"): (asgi_server_timing.ServerTimingMiddleware.__call__,),
 }
 
-fastapi_app.add_middleware(ServerTimingMiddleware, calls_to_track=track)
+fastapi_app.add_middleware(ServerTimingMiddleware, calls_to_track=track, overwrite_behavior='replace')
 
 if __name__ == '__main__':
 	import uvicorn
